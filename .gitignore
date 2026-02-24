@@ -1,0 +1,8 @@
+output/
+output_test/
+.env
+openai-api-key.txt
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/

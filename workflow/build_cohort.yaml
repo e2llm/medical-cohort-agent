@@ -1,0 +1,603 @@
+# =============================================================================
+# Workflow: Build Patient Cohort
+# Category: search / medical
+#
+# Creates a normalized patient cohort index by reindexing matching patients
+# from heterogeneous medical facilities. The agent discovers facility schemas,
+# builds field maps, and passes them as the `facilities` input. A single
+# parameterized Painless script handles all type conversions and field mapping.
+#
+# Strict pass: foreach facility → reindex with Painless normalization
+# kNN pass:    foreach facility → kNN search → foreach hit → index normalized
+# =============================================================================
+
+name: Build Patient Cohort
+description: >
+  Creates a normalized patient cohort index from multi-facility medical records.
+  The agent provides facility field maps; the workflow normalizes generically
+  via parameterized Painless, then runs a semantic kNN pass for probable matches.
+enabled: true
+tags:
+  - medical
+  - cohort
+  - search
+
+# ---------------------------------------------------------------------------
+# TRIGGERS
+# ---------------------------------------------------------------------------
+triggers:
+  - type: manual
+
+# ---------------------------------------------------------------------------
+# INPUTS
+# ---------------------------------------------------------------------------
+inputs:
+  - name: cohort_name
+    type: string
+    required: true
+    description: "Cohort index name suffix (e.g. diabetic_smokers_60plus)"
+  - name: conditions
+    type: string
+    required: false
+    description: "JSON array of condition names in Hebrew (e.g. [\"סוכרת סוג 2\"])"
+  - name: age_min
+    type: string
+    required: false
+    description: "Minimum patient age (inclusive)"
+  - name: age_max
+    type: string
+    required: false
+    description: "Maximum patient age (inclusive)"
+  - name: gender
+    type: string
+    required: false
+    description: "Gender filter — male or female"
+  - name: smoking
+    type: string
+    required: false
+    description: "Smoking status — true or false"
+  - name: medications
+    type: string
+    required: false
+    description: "JSON array of medication names in Hebrew"
+  - name: icd10
+    type: string
+    required: false
+    description: "JSON array of ICD-10 codes"
+  - name: search_text
+    type: string
+    required: false
+    description: "Natural language research question for semantic kNN matching via E5 embeddings"
+  - name: facilities
+    type: string
+    required: true
+    description: >
+      JSON array of facility configs with flat field maps. Each element:
+      { "index_pattern": "medical_alon_*", "display_name": "בית חולים האלון",
+        "confidence": "strict", "caveats": "",
+        "f_patient_id": "patient_id", "t_patient_id": "keyword",
+        "f_age": "patient_age", "t_age": "integer",
+        "f_gender": "gender", "f_smoking": "smoking_status", "t_smoking": "boolean",
+        "f_conditions": "conditions", "f_medications": "medications",
+        "f_icd10": "icd10_code", "f_notes": "clinical_notes",
+        "f_name": "patient_name", "f_department": "department",
+        "f_diagnosis": "primary_diagnosis", "f_date": "document_date" }
+      Empty string for f_* = field not available. t_patient_id: keyword|long|float.
+      t_age: integer|keyword_range. t_smoking: boolean or empty.
+  - name: knn_facilities
+    type: string
+    required: false
+    description: >
+      JSON array of facility configs for kNN pass. Same structure as facilities
+      but only facilities with text_embedding field. Each element may also include
+      f_patient_id, f_name, f_age, f_gender, etc. for normalizing kNN hits.
+
+# ---------------------------------------------------------------------------
+# Normalized cohort index schema:
+#   patient_id        keyword     (always 9-digit string, zero-padded)
+#   patient_name      text+kw
+#   age               integer     (midpoint for ranges)
+#   age_raw           keyword     (original: "67" or "60-70")
+#   gender            keyword     (English: male/female)
+#   conditions        keyword[]
+#   medications       keyword[]
+#   icd10_codes       keyword[]
+#   smoking           keyword     ("true"/"false"/"unknown")
+#   department        keyword
+#   diagnosis         text+kw
+#   clinical_notes    text
+#   document_date     keyword     (original format preserved)
+#   doc_type          keyword
+#   source_facility   keyword     (Hebrew facility name)
+#   source_index      keyword     (original ES index)
+#   match_confidence  keyword     ("strict" or "probable")
+#   match_explanation  text        (human-readable caveats)
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# STEPS
+# ===========================================================================
+steps:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 1: Delete existing cohort index (idempotent re-run)
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: delete_existing
+    type: elasticsearch.request
+    on-failure:
+      continue: true
+    with:
+      method: DELETE
+      path: "/cohort_{{ inputs.cohort_name }}"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 1b: Create ingest pipeline for patient_id normalization
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: create_normalize_pipeline
+    type: elasticsearch.request
+    on-failure:
+      continue: true
+    with:
+      method: PUT
+      path: "/_ingest/pipeline/cohort_normalize_patient_id"
+      body:
+        description: "Normalize patient_id + add evidence_snippet"
+        processors:
+          - script:
+              source: >
+                def pid = ctx.patient_id;
+                if (pid != null) {
+                  String s = pid instanceof String ? pid : pid.toString();
+                  if (s.length() > 0) {
+                    int dot = s.indexOf('.');
+                    if (dot >= 0) { s = s.substring(0, dot); }
+                    while (s.length() < 9) { s = '0' + s; }
+                    ctx.patient_id = s;
+                  }
+                }
+
+                def notes = ctx.clinical_notes;
+                if (notes != null) {
+                  String t = notes instanceof String ? notes : notes.toString();
+                  if (t.length() > 220) { t = t.substring(0, 220); }
+                  ctx.evidence_snippet = t;
+                }
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 2: Create cohort index with normalized mapping
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: create_cohort_index
+    type: elasticsearch.request
+    with:
+      method: PUT
+      path: "/cohort_{{ inputs.cohort_name }}"
+      body:
+        settings:
+          number_of_shards: 1
+          number_of_replicas: 0
+          default_pipeline: cohort_normalize_patient_id
+        mappings:
+          properties:
+            patient_id:
+              type: keyword
+            patient_name:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+            age:
+              type: integer
+            age_raw:
+              type: keyword
+            gender:
+              type: keyword
+            conditions:
+              type: keyword
+            medications:
+              type: keyword
+            icd10_codes:
+              type: keyword
+            smoking:
+              type: keyword
+            department:
+              type: keyword
+            diagnosis:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+            clinical_notes:
+              type: text
+            evidence_snippet:
+              type: text
+            document_date:
+              type: keyword
+            doc_type:
+              type: keyword
+            source_facility:
+              type: keyword
+            source_index:
+              type: keyword
+            match_confidence:
+              type: keyword
+            match_explanation:
+              type: text
+            knn_score:
+              type: float
+            source_field_map:
+              properties:
+                patient_id:
+                  type: keyword
+                patient_name:
+                  type: keyword
+                age:
+                  type: keyword
+                gender:
+                  type: keyword
+                smoking:
+                  type: keyword
+                conditions:
+                  type: keyword
+                medications:
+                  type: keyword
+                icd10_codes:
+                  type: keyword
+                clinical_notes:
+                  type: keyword
+                department:
+                  type: keyword
+                diagnosis:
+                  type: keyword
+                document_date:
+                  type: keyword
+            text_embedding:
+              type: dense_vector
+              dims: 1024
+              index: true
+              similarity: cosine
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 3: Strict pass — foreach facility, single parameterized Painless
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: reindex_facilities
+    type: foreach
+    foreach: "{{ inputs.facilities | json_parse }}"
+    steps:
+      - name: reindex_facility
+        type: elasticsearch.request
+        on-failure:
+          continue: true
+        with:
+          method: POST
+          path: "/_reindex"
+          body:
+            source:
+              index: "{{ foreach.item.index_pattern }}"
+            dest:
+              index: "cohort_{{ inputs.cohort_name }}"
+            script:
+              lang: painless
+              params:
+                f_patient_id: "{{ foreach.item.f_patient_id | default: '' }}"
+                f_name: "{{ foreach.item.f_name | default: '' }}"
+                f_age: "{{ foreach.item.f_age | default: '' }}"
+                f_gender: "{{ foreach.item.f_gender | default: '' }}"
+                f_smoking: "{{ foreach.item.f_smoking | default: '' }}"
+                f_conditions: "{{ foreach.item.f_conditions | default: '' }}"
+                f_medications: "{{ foreach.item.f_medications | default: '' }}"
+                f_icd10: "{{ foreach.item.f_icd10 | default: '' }}"
+                f_notes: "{{ foreach.item.f_notes | default: '' }}"
+                f_department: "{{ foreach.item.f_department | default: '' }}"
+                f_diagnosis: "{{ foreach.item.f_diagnosis | default: '' }}"
+                f_date: "{{ foreach.item.f_date | default: '' }}"
+                t_patient_id: "{{ foreach.item.t_patient_id | default: 'keyword' }}"
+                t_age: "{{ foreach.item.t_age | default: 'integer' }}"
+                t_smoking: "{{ foreach.item.t_smoking | default: '' }}"
+                display_name: "{{ foreach.item.display_name | default: '' }}"
+                confidence: "{{ foreach.item.confidence | default: 'strict' }}"
+                caveats: "{{ foreach.item.caveats | default: '' }}"
+                conditions: "{{ inputs.conditions | default: '' }}"
+                age_min: "{{ inputs.age_min | default: '' }}"
+                age_max: "{{ inputs.age_max | default: '' }}"
+                gender: "{{ inputs.gender | default: '' }}"
+                smoking: "{{ inputs.smoking | default: '' }}"
+                medications: "{{ inputs.medications | default: '' }}"
+                icd10: "{{ inputs.icd10 | default: '' }}"
+              source: |
+                // ── Generic reindex: field names from params.f_*, types from params.t_* ──
+                def getF(def src, String fname) {
+                  if (fname == null || fname.length() == 0) return null;
+                  return src.containsKey(fname) ? src[fname] : null;
+                }
+
+                // Parse JSON array params
+                List conds = new ArrayList(); List meds = new ArrayList(); List codes = new ArrayList();
+                if (params.conditions != null && params.conditions.length() > 2) {
+                  String s = params.conditions.substring(1, params.conditions.length() - 1);
+                  for (String v : s.splitOnToken(',')) { conds.add(v.trim().replace('"', '')); }
+                }
+                if (params.medications != null && params.medications.length() > 2) {
+                  String s = params.medications.substring(1, params.medications.length() - 1);
+                  for (String v : s.splitOnToken(',')) { meds.add(v.trim().replace('"', '')); }
+                }
+                if (params.icd10 != null && params.icd10.length() > 2) {
+                  String s = params.icd10.substring(1, params.icd10.length() - 1);
+                  for (String v : s.splitOnToken(',')) { codes.add(v.trim().replace('"', '')); }
+                }
+                int ageMin = params.age_min != null && params.age_min.length() > 0 ? Integer.parseInt(params.age_min) : -1;
+                int ageMax = params.age_max != null && params.age_max.length() > 0 ? Integer.parseInt(params.age_max) : 999;
+                def src = ctx._source;
+
+                // ── FILTER: conditions ──
+                if (conds.size() > 0) {
+                  if (params.f_conditions.length() == 0) { ctx.op = 'noop'; return; }
+                  def dc = getF(src, params.f_conditions);
+                  if (dc == null) dc = [];
+                  if (dc instanceof String) dc = [dc];
+                  boolean hit = false;
+                  for (def c : conds) { for (def d : dc) { if (d != null && d.contains(c)) hit = true; } }
+                  if (!hit) { ctx.op = 'noop'; return; }
+                }
+
+                // ── FILTER: age ──
+                if (ageMin > 0 || ageMax < 999) {
+                  if (params.f_age.length() == 0) { int _skip = 0; }
+                  else if (params.t_age.equals('keyword_range')) {
+                    String ag = getF(src, params.f_age);
+                    if (ag == null) { ctx.op = 'noop'; return; }
+                    String[] parts = ag.splitOnToken('-');
+                    if (parts.length != 2) { ctx.op = 'noop'; return; }
+                    int lo = Integer.parseInt(parts[0].trim());
+                    int hi = Integer.parseInt(parts[1].trim());
+                    if (hi < ageMin || lo > ageMax) { ctx.op = 'noop'; return; }
+                  } else {
+                    def rawAge = getF(src, params.f_age);
+                    if (rawAge == null) { ctx.op = 'noop'; return; }
+                    int age = -1;
+                    try { age = Integer.parseInt(String.valueOf(rawAge)); } catch (Exception e) { ctx.op = 'noop'; return; }
+                    if (age < ageMin || age > ageMax) { ctx.op = 'noop'; return; }
+                  }
+                }
+
+                // ── FILTER: gender ──
+                if (params.gender != null && params.gender.length() > 0) {
+                  if (params.f_gender.length() == 0) { int _skip = 0; }
+                  else {
+                    def g = getF(src, params.f_gender);
+                    if (g == null || !g.equals(params.gender)) { ctx.op = 'noop'; return; }
+                  }
+                }
+
+                // ── FILTER: smoking ──
+                if (params.smoking != null && params.smoking.length() > 0) {
+                  if (params.f_smoking.length() == 0) { int _skip = 0; }
+                  else {
+                    def s = getF(src, params.f_smoking);
+                    if (s == null) { ctx.op = 'noop'; return; }
+                    if (params.t_smoking.equals('boolean')) {
+                      boolean expected = params.smoking.equals('true');
+                      if (s != expected) { ctx.op = 'noop'; return; }
+                    } else {
+                      if (!String.valueOf(s).equals(params.smoking)) { ctx.op = 'noop'; return; }
+                    }
+                  }
+                }
+
+                // ── FILTER: medications ──
+                if (meds.size() > 0) {
+                  if (params.f_medications.length() == 0) { ctx.op = 'noop'; return; }
+                  def dm = getF(src, params.f_medications);
+                  if (dm == null) dm = [];
+                  if (dm instanceof String) dm = [dm];
+                  boolean hit = false;
+                  for (def m : meds) { for (def d : dm) { if (d != null && d.contains(m)) hit = true; } }
+                  if (!hit) { ctx.op = 'noop'; return; }
+                }
+
+                // ── FILTER: icd10 ──
+                if (codes.size() > 0) {
+                  if (params.f_icd10.length() == 0) { ctx.op = 'noop'; return; }
+                  def di = getF(src, params.f_icd10);
+                  if (di == null) di = [];
+                  if (di instanceof String) di = [di];
+                  boolean hit = false;
+                  for (def c : codes) { for (def d : di) { if (d != null && d.contains(c)) hit = true; } }
+                  if (!hit) { ctx.op = 'noop'; return; }
+                }
+
+                // ── NORMALIZE output ──
+                def out = new HashMap();
+
+                // Patient ID (type-aware: keyword → direct, long/float → cast + pad)
+                def rawPid = getF(src, params.f_patient_id);
+                String pid = '';
+                if (rawPid != null) {
+                  if (params.t_patient_id.equals('long') || params.t_patient_id.equals('float')) {
+                    pid = String.valueOf((long) rawPid);
+                    while (pid.length() < 9) { pid = '0' + pid; }
+                  } else {
+                    pid = String.valueOf(rawPid);
+                  }
+                }
+                out.put('patient_id', pid);
+                out.put('patient_name', getF(src, params.f_name) ?: '');
+
+                // Age (type-aware: integer → direct, keyword_range → midpoint)
+                def rawAge = getF(src, params.f_age);
+                if (params.t_age.equals('keyword_range') && rawAge != null && rawAge.contains('-')) {
+                  String[] parts = rawAge.splitOnToken('-');
+                  out.put('age', (Integer.parseInt(parts[0].trim()) + Integer.parseInt(parts[1].trim())) / 2);
+                  out.put('age_raw', rawAge);
+                } else if (rawAge != null) {
+                  int av = -1;
+                  try { av = Integer.parseInt(String.valueOf(rawAge)); } catch (Exception e) {}
+                  out.put('age', av > 0 ? av : null);
+                  out.put('age_raw', String.valueOf(rawAge));
+                } else {
+                  out.put('age', null);
+                  out.put('age_raw', '');
+                }
+
+                out.put('gender', getF(src, params.f_gender) ?: '');
+                out.put('conditions', getF(src, params.f_conditions) ?: []);
+                out.put('medications', getF(src, params.f_medications) ?: []);
+                out.put('icd10_codes', getF(src, params.f_icd10) ?: []);
+
+                def smoke = getF(src, params.f_smoking);
+                out.put('smoking', smoke != null ? String.valueOf(smoke) : 'unknown');
+
+                out.put('department', getF(src, params.f_department) ?: '');
+                out.put('diagnosis', getF(src, params.f_diagnosis) ?: '');
+                out.put('clinical_notes', getF(src, params.f_notes) ?: '');
+                if (src.containsKey('text_embedding')) { out.put('text_embedding', src.text_embedding); }
+                out.put('document_date', getF(src, params.f_date) ?: '');
+                out.put('doc_type', src.containsKey('doc_type') ? src.doc_type : '');
+                out.put('source_facility', params.display_name);
+                out.put('source_index', ctx._index);
+                out.put('match_confidence', params.confidence);
+                String expl = 'Matched via structured fields';
+                if (params.caveats.length() > 0) expl = expl + '; ' + params.caveats;
+                out.put('match_explanation', expl);
+
+                def sf = new HashMap();
+                sf.put('patient_id', params.f_patient_id);
+                sf.put('patient_name', params.f_name);
+                sf.put('age', params.f_age);
+                sf.put('gender', params.f_gender);
+                sf.put('smoking', params.f_smoking);
+                sf.put('conditions', params.f_conditions);
+                sf.put('medications', params.f_medications);
+                sf.put('icd10_codes', params.f_icd10);
+                sf.put('clinical_notes', params.f_notes);
+                sf.put('department', params.f_department);
+                sf.put('diagnosis', params.f_diagnosis);
+                sf.put('document_date', params.f_date);
+                out.put('source_field_map', sf);
+
+                ctx._source = out;
+                ctx._id = ctx._id + '_' + ctx._index;
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 4: Semantic kNN pass — nested foreach (facility × hits)
+  # ─────────────────────────────────────────────────────────────────────────
+  # Uses E5 embeddings + kNN search to find semantically similar clinical
+  # notes. Guarded by if: skipped when search_text is empty.
+  # Outer foreach: iterate knn_facilities
+  # Inner foreach: iterate kNN hits, index normalized doc into cohort
+  # Uses op_type=create to deduplicate against strict pass.
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: run_knn_pass
+    type: if
+    condition: "{% if inputs.search_text != blank %}true{% else %}false{% endif %}"
+    steps:
+
+      - name: foreach_knn_facility
+        type: foreach
+        foreach: "{{ inputs.knn_facilities | json_parse }}"
+        on-failure:
+          continue: true
+        steps:
+
+          - name: knn_search
+            type: elasticsearch.search
+            on-failure:
+              continue: true
+            with:
+              index: "{{ foreach.item.index_pattern }}"
+              size: 50
+              knn:
+                field: text_embedding
+                k: 20
+                num_candidates: 100
+                query_vector_builder:
+                  text_embedding:
+                    model_id: e5_embedder
+                    model_text: "{{ inputs.search_text }}"
+
+          - name: foreach_knn_hits
+            type: foreach
+            foreach: "{{ steps.knn_search.output.hits.hits }}"
+            on-failure:
+              continue: true
+            steps:
+              - name: index_knn_hit
+                type: elasticsearch.request
+                on-failure:
+                  continue: true
+                with:
+                  method: PUT
+                  path: "/cohort_{{ inputs.cohort_name }}/_doc/{{ foreach.item._id }}_{{ foreach.item._index }}?op_type=create"
+                  body:
+                    patient_id: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_patient_id] | default: '' }}"
+                    patient_name: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_name] | default: '' }}"
+                    age: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_age] | default: '' }}"
+                    age_raw: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_age] | default: '' }}"
+                    gender: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_gender] | default: '' }}"
+                    conditions: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_conditions] | default: '' }}"
+                    medications: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_medications] | default: '' }}"
+                    icd10_codes: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_icd10] | default: '' }}"
+                    smoking: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_smoking] | default: 'unknown' }}"
+                    department: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_department] | default: '' }}"
+                    diagnosis: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_diagnosis] | default: '' }}"
+                    clinical_notes: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_notes] | default: '' }}"
+                    document_date: "{{ foreach.item._source[steps.foreach_knn_facility.item.f_date] | default: '' }}"
+                    doc_type: "{{ foreach.item._source.doc_type | default: '' }}"
+                    source_facility: "{{ steps.foreach_knn_facility.item.display_name }}"
+                    source_index: "{{ foreach.item._index }}"
+                    knn_score: "{{ foreach.item._score | default: '' }}"
+                    source_field_map:
+                      patient_id: "{{ steps.foreach_knn_facility.item.f_patient_id | default: '' }}"
+                      patient_name: "{{ steps.foreach_knn_facility.item.f_name | default: '' }}"
+                      age: "{{ steps.foreach_knn_facility.item.f_age | default: '' }}"
+                      gender: "{{ steps.foreach_knn_facility.item.f_gender | default: '' }}"
+                      smoking: "{{ steps.foreach_knn_facility.item.f_smoking | default: '' }}"
+                      conditions: "{{ steps.foreach_knn_facility.item.f_conditions | default: '' }}"
+                      medications: "{{ steps.foreach_knn_facility.item.f_medications | default: '' }}"
+                      icd10_codes: "{{ steps.foreach_knn_facility.item.f_icd10 | default: '' }}"
+                      clinical_notes: "{{ steps.foreach_knn_facility.item.f_notes | default: '' }}"
+                      department: "{{ steps.foreach_knn_facility.item.f_department | default: '' }}"
+                      diagnosis: "{{ steps.foreach_knn_facility.item.f_diagnosis | default: '' }}"
+                      document_date: "{{ steps.foreach_knn_facility.item.f_date | default: '' }}"
+                    match_confidence: probable
+                    match_explanation: "Matched via semantic similarity of clinical text; {{ steps.foreach_knn_facility.item.caveats | default: '' }}"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 5: Refresh index to make reindexed docs visible
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: refresh_cohort
+    type: elasticsearch.request
+    on-failure:
+      continue: true
+    with:
+      method: POST
+      path: "/cohort_{{ inputs.cohort_name }}/_refresh"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 6: Count results with breakdown
+  # ─────────────────────────────────────────────────────────────────────────
+  - name: count_results
+    type: elasticsearch.search
+    with:
+      index: "cohort_{{ inputs.cohort_name }}"
+      size: 0
+      aggs:
+        total:
+          value_count:
+            field: "patient_id"
+        unique_patients:
+          cardinality:
+            field: "patient_id"
+        by_confidence:
+          terms:
+            field: "match_confidence"
+        by_facility:
+          terms:
+            field: "source_facility"
+        by_facility_confidence:
+          terms:
+            field: "source_facility"
+            size: 10
+          aggs:
+            confidence:
+              terms:
+                field: "match_confidence"

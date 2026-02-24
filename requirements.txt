@@ -1,0 +1,4 @@
+e2llm-medsynth
+elasticsearch>=8.0
+requests
+python-dotenv

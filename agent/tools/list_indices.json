@@ -1,0 +1,8 @@
+{
+  "name": "list_indices",
+  "description": "List all available medical data indices with document counts. Use this as the first step to understand what data sources are available.",
+  "type": "esql",
+  "configuration": {
+    "description": "Lists available indices. Use: SHOW INFO or query specific index patterns to discover available data sources."
+  }
+}

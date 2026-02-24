@@ -1,0 +1,8 @@
+{
+  "name": "query_indices",
+  "description": "Execute an ES|QL query across medical data indices. Use this to search for patients, filter by conditions, aggregate data, and find cohorts. Always discover the schema first to know the correct field names for each index.",
+  "type": "esql",
+  "configuration": {
+    "description": "Runs ES|QL queries against the medical data indices. Supports cross-index queries with FROM index1, index2 syntax. Remember that field names differ across facilities — use RENAME and COALESCE to normalize."
+  }
+}

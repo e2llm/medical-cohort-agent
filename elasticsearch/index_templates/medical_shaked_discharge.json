@@ -1,0 +1,79 @@
+{
+  "index_patterns": [
+    "medical_shaked_discharge"
+  ],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "tz": {
+          "type": "float"
+        },
+        "shem": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "clinic": {
+          "type": "keyword"
+        },
+        "taarich": {
+          "type": "keyword"
+        },
+        "addr": {
+          "type": "text"
+        },
+        "age_group": {
+          "type": "keyword"
+        },
+        "min": {
+          "type": "keyword"
+        },
+        "smoking": {
+          "type": "boolean"
+        },
+        "job": {
+          "type": "keyword"
+        },
+        "background": {
+          "type": "keyword"
+        },
+        "drugs": {
+          "type": "keyword"
+        },
+        "code": {
+          "type": "keyword"
+        },
+        "text": {
+          "type": "text"
+        },
+        "yechida": {
+          "type": "keyword"
+        },
+        "diagnosis": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "doc_type": {
+          "type": "keyword"
+        },
+        "text_embedding": {
+          "type": "dense_vector",
+          "dims": 1024,
+          "index": true,
+          "similarity": "cosine"
+        }
+      }
+    }
+  }
+}

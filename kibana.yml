@@ -1,0 +1,6 @@
+server.host: "0.0.0.0"  # binds inside the container; host access controlled by docker-compose port binding
+server.shutdownTimeout: "5s"
+monitoring.ui.container.elasticsearch.enabled: true
+# WARNING: Demo-only key — generate a unique key for any non-throwaway environment.
+# This key protects connector secrets (API keys stored in Kibana saved objects).
+xpack.encryptedSavedObjects.encryptionKey: "a3JfDs9Kq7Lm2Wp5Xz8YnBvE6RcHackaton"

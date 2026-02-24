@@ -1,0 +1,70 @@
+{
+  "index_patterns": [
+    "medical_ofek_lab"
+  ],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "patient_id": {
+          "type": "keyword"
+        },
+        "name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "lab_name": {
+          "type": "keyword"
+        },
+        "collection_date": {
+          "type": "keyword"
+        },
+        "age": {
+          "type": "integer"
+        },
+        "sex": {
+          "type": "keyword"
+        },
+        "notes": {
+          "type": "text"
+        },
+        "lab_results": {
+          "type": "nested",
+          "properties": {
+            "test": {
+              "type": "keyword"
+            },
+            "result": {
+              "type": "float"
+            },
+            "units": {
+              "type": "keyword"
+            },
+            "ref_range": {
+              "type": "keyword"
+            },
+            "flag": {
+              "type": "keyword"
+            }
+          }
+        },
+        "doc_type": {
+          "type": "keyword"
+        },
+        "text_embedding": {
+          "type": "dense_vector",
+          "dims": 1024,
+          "index": true,
+          "similarity": "cosine"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "index_patterns": [
+    "medical_hadarim_discharge"
+  ],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "מספר_זהות": {
+          "type": "long"
+        },
+        "שם_מטופל": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "מוסד_רפואי": {
+          "type": "keyword"
+        },
+        "תאריך": {
+          "type": "keyword"
+        },
+        "כתובת": {
+          "type": "text"
+        },
+        "גיל": {
+          "type": "integer"
+        },
+        "מין": {
+          "type": "keyword"
+        },
+        "סוג_דם": {
+          "type": "keyword"
+        },
+        "מחלות_רקע": {
+          "type": "keyword"
+        },
+        "תרופות": {
+          "type": "keyword"
+        },
+        "קוד_אבחנה": {
+          "type": "keyword"
+        },
+        "סיכום_רפואי": {
+          "type": "text"
+        },
+        "מחלקה": {
+          "type": "keyword"
+        },
+        "אבחנה_ראשית": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "doc_type": {
+          "type": "keyword"
+        },
+        "text_embedding": {
+          "type": "dense_vector",
+          "dims": 1024,
+          "index": true,
+          "similarity": "cosine"
+        }
+      }
+    }
+  }
+}

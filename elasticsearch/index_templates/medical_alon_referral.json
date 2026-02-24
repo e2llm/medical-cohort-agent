@@ -1,0 +1,91 @@
+{
+  "index_patterns": [
+    "medical_alon_referral"
+  ],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "patient_id": {
+          "type": "keyword"
+        },
+        "patient_name": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "facility_name": {
+          "type": "keyword"
+        },
+        "document_date": {
+          "type": "keyword"
+        },
+        "patient_address": {
+          "type": "text"
+        },
+        "patient_age": {
+          "type": "integer"
+        },
+        "gender": {
+          "type": "keyword"
+        },
+        "smoking_status": {
+          "type": "boolean"
+        },
+        "blood_type": {
+          "type": "keyword"
+        },
+        "occupation": {
+          "type": "keyword"
+        },
+        "conditions": {
+          "type": "keyword"
+        },
+        "medications": {
+          "type": "keyword"
+        },
+        "icd10_code": {
+          "type": "keyword"
+        },
+        "clinical_notes": {
+          "type": "text"
+        },
+        "department": {
+          "type": "keyword"
+        },
+        "primary_diagnosis": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword"
+            }
+          }
+        },
+        "referred_to_department": {
+          "type": "keyword"
+        },
+        "referral_reason": {
+          "type": "text"
+        },
+        "urgency_level": {
+          "type": "keyword"
+        },
+        "doc_type": {
+          "type": "keyword"
+        },
+        "text_embedding": {
+          "type": "dense_vector",
+          "dims": 1024,
+          "index": true,
+          "similarity": "cosine"
+        }
+      }
+    }
+  }
+}

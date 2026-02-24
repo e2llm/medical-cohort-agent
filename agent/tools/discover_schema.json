@@ -1,0 +1,8 @@
+{
+  "name": "discover_schema",
+  "description": "Discover the schema of a medical data index. Returns field names, types, and sample values. ALWAYS use this before querying an unfamiliar index to understand field naming conventions.",
+  "type": "esql",
+  "configuration": {
+    "description": "Inspects index schema and sample data. Use queries like: FROM <index> | LIMIT 5 to see sample documents, or FROM <index> | STATS count=COUNT(*) to see document counts."
+  }
+}
