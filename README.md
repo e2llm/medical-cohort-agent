@@ -159,11 +159,11 @@ The agent discovers schemas (via `list_indices`, `get_index_mapping`, `search`),
 ### Production Architecture
 
 In production, this runs air-gapped on a single VM:
-- **LLM**: Ollama + Llama 4 (local inference, no cloud dependency)
+- **LLM**: Ollama + Qwen 3 30B (local inference, no cloud dependency — see [LLM Tool Calling findings](docs/LLM-TOOL-CALLING.md))
 - **Embeddings**: E5-large via Ollama (1024-dim vectors for semantic search)
 - **Stack**: Elasticsearch 9.3 + Kibana (Agent Builder)
 
-The architecture is LLM-agnostic — works with Ollama (local), or any cloud AI provider via OpenAI-compatible connectors.
+The architecture is LLM-agnostic — works with any model that supports OpenAI-compatible tool calling (see [docs/LLM-TOOL-CALLING.md](docs/LLM-TOOL-CALLING.md) for validated models).
 
 ## Schema Variance
 
@@ -214,7 +214,7 @@ After the workflow runs, `cohort_<name>` contains normalized records:
 - Python 3.11+
 - **LLM** — one of:
   - **Cloud AI (easiest):** OpenAI API key — set `OPENAI_API_KEY` in `.env`
-  - **Local Ollama (air-gapped):** Requires GPU or a LAN machine running Ollama
+  - **Local Ollama (air-gapped):** Requires GPU and a model with tool calling support (see [docs/LLM-TOOL-CALLING.md](docs/LLM-TOOL-CALLING.md))
 
 Ollama for E5 embeddings runs inside a container (part of `docker-compose.yml`) — no system install needed. The E5 model runs on CPU, no GPU required.
 
@@ -320,7 +320,7 @@ python elasticsearch/bulk_index.py --data-dir sample_data --recreate
 python agent/setup.py
 ```
 
-This creates an OpenAI LLM connector (using `OPENAI_API_KEY` from `.env`), imports the workflow, registers the workflow tool, and creates the agent. For local Ollama as LLM, create the connector manually in Kibana (Connectors → OpenAI → point URL to Ollama's OpenAI-compatible endpoint).
+This creates an OpenAI LLM connector (using `OPENAI_API_KEY` from `.env`), imports the workflow, registers the workflow tool, and creates the agent. For local Ollama as LLM, create the connector manually in Kibana — see [docs/LLM-TOOL-CALLING.md](docs/LLM-TOOL-CALLING.md) for connector setup and model selection.
 
 Enable workflows in Kibana: **Stack Management** → **Advanced Settings** → `workflows:ui:enabled` → ON.
 
@@ -380,7 +380,7 @@ LLM_API_KEY=sk-... e2llm-medsynth --api-base https://api.openai.com/v1 --model g
   --verbose --output-dir sample_data
 
 # With free text via local Ollama (requires GPU)
-ollama pull ${OLLAMA_LLM_MODEL:-llama4:maverick}
+ollama pull ${OLLAMA_LLM_MODEL:-qwen3:30b}
 e2llm-medsynth --verbose --output-dir sample_data
 
 # Then re-index
