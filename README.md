@@ -107,45 +107,7 @@ Agent queries `match_confidence: "probable"` → shows per-patient explanations.
 
 ## Architecture
 
-```mermaid
-graph TB
-    H["Healthcare Researcher"]
-
-    subgraph "Agent Builder"
-        F["Medical Cohort Agent<br/>(Judgment Layer)"]
-        G["Platform Tools:<br/>list_indices · get_mapping<br/>execute_esql · search"]
-        W["Workflow Tool:<br/>build_cohort"]
-    end
-
-    subgraph "Elastic Workflow"
-        R1["Strict Pass<br/>foreach facility<br/>single Painless"]
-        R2["Semantic kNN Pass<br/>(E5 embeddings)"]
-        R3["Count + Breakdown"]
-    end
-
-    subgraph "Data Sources (4 Facilities)"
-        A["בית חולים האלון<br/>Large Hospital · Digital"]
-        B["מרכז רפואי הדרים<br/>Medium Hospital · OCR+Digital"]
-        C["מעבדות אופק<br/>Lab Chain · Digital"]
-        D["מרפאות שקד<br/>Clinic Network · OCR"]
-    end
-
-    subgraph "Elasticsearch 9.3"
-        E["10 Source Indices<br/>(heterogeneous schemas)"]
-        V["E5-large Embeddings<br/>(1024-dim vectors)"]
-        CI["cohort_<name><br/>(normalized schema)"]
-    end
-
-    H <-->|"NL question"| F
-    F --> G
-    F -->|"criteria + facilities<br/>JSON + search_text"| W
-    W --> R1 --> R2 --> R3
-    A & B & C & D -->|"NDJSON"| E
-    V -->|"kNN search"| R2
-    E --> R1
-    R3 --> CI
-    CI -->|"follow-up queries"| G
-```
+![Medical Cohort Builder Architecture](docs/infographic.png)
 
 ### Two-Layer Design
 
