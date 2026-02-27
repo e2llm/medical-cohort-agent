@@ -175,7 +175,7 @@ After the workflow runs, `cohort_<name>` contains normalized records:
 - Podman (or Docker) with compose
 - Python 3.11+
 - **LLM** — one of:
-  - **Cloud AI (easiest):** OpenAI API key — set `OPENAI_API_KEY` in `.env`
+  - **Cloud AI (easiest):** OpenAI API key — set `OPENAI_API_KEY` in `.env`, or use Elastic EIS configured directly from Kibana
   - **Local Ollama (air-gapped):** Requires GPU and a model with tool calling support (see [docs/LLM-TOOL-CALLING.md](docs/LLM-TOOL-CALLING.md))
 
 Ollama for E5 embeddings runs inside a container (part of `docker-compose.yml`) — no system install needed. The E5 model runs on CPU, no GPU required.
@@ -186,7 +186,7 @@ Ollama for E5 embeddings runs inside a container (part of `docker-compose.yml`) 
 cp .env.example .env
 # Edit .env:
 #   - Set ELASTIC_PASSWORD and KIBANA_PASSWORD
-#   - Set OPENAI_API_KEY for cloud AI  (or uncomment OLLAMA_LLM_URL/OLLAMA_LLM_MODEL for local LLM)
+#   - Set OPENAI_API_KEY for cloud AI (or use Elastic EIS from Kibana)  (or uncomment OLLAMA_LLM_URL/OLLAMA_LLM_MODEL for local LLM)
 #   - Embedding defaults work out of the box (Ollama E5 runs in a container)
 
 bash scripts/demo_setup.sh
